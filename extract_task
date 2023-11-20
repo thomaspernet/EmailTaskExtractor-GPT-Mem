@@ -1,0 +1,127 @@
+// Script to extract information from ChatGPT and push to Mem
+
+// Prompt for ChatGPT to process email content
+var prompt_email = 
+  "Identify and list task items from the email using bullet points. " +
+  "I don't want the details of the actions, instead a general task title. " +
+  "Provide a summary title at the beginning to encapsulate the main tasks. " +
+  "Focus exclusively on the current email content, disregarding any previous email threads. " +
+  "If no actions are present, simply note 'None'. " +
+  "For emails not in English, present the tasks in English. " +
+  "Additionally, include a brief summary of the email, limited to two sentences. " +
+  "Conclude with up to five relevant keywords.\n\n" +
+  "Follow this template\n\n" +
+  "### title\n\n" +
+  "Short resume\n\n" +
+  "- tasks 1\n" +
+  "- tasks 2\n\n" +
+  "keywords";
+
+// Function to push notes to Mem.ai
+function push_to_mem(note) {
+  var api_key = PropertiesService.getScriptProperties().getProperty('api_mem');
+  var apiUrl = "https://api.mem.ai/v0/mems";
+  
+  var headers = {
+    "Authorization" : "ApiAccessToken " + api_key,
+    "Content-Type" : "application/json"
+  };
+  
+  var payload = {
+    "content": note
+  };
+  
+  var options = {
+    "method" : "post",
+    "headers" : headers,
+    "payload" : JSON.stringify(payload)
+  };
+  
+  var response = UrlFetchApp.fetch(apiUrl, options);
+  return response.getContentText();
+}
+
+// Function to get response from ChatGPT
+function get_answer_chatGPT(text, prompt, model = 'gpt-4-1106-preview') {
+  var api_key = PropertiesService.getScriptProperties().getProperty('api_openai');
+  
+  prompt = prompt + "\nHere is the body of the email:\n" + text;
+  var url = "https://api.openai.com/v1/chat/completions";
+  var data = {
+    "model": model, 
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": prompt}
+    ]
+  };
+  var options = {
+    method: 'post',
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + api_key
+    },
+    payload: JSON.stringify(data),
+    muteHttpExceptions: true
+  };
+
+  var maxAttempts = 5;
+  var attempt = 0;
+
+  while(attempt < maxAttempts) {
+    try {
+      var response = UrlFetchApp.fetch(url, options);
+      var result = JSON.parse(response.getContentText());
+      if (response.getResponseCode() != 200) {
+        throw new Error(result.error.message);
+      }
+      return result.choices[0].message.content;
+    } catch(e) {
+      Utilities.sleep(3000); // Wait for 3 seconds
+      if(attempt == 3) {
+        data.model = "gpt-3.5-turbo";
+        options.payload = JSON.stringify(data);
+      }
+      attempt++;
+    }
+  }
+  
+  return "Cannot get results";
+}
+
+// Function to process starred emails
+function getStarredEmails() {
+  var threads = GmailApp.search('is:starred');
+  //Logger.log(threads.length)
+  for (var i = 0; i < threads.length; i++) {
+    var messages = threads[i].getMessages();
+    for (var m = 0; m < messages.length; m++) {
+      var message = messages[m];
+      
+      // Extract necessary information from the email message
+      var email_link = "https://mail.google.com/mail/u/0/#inbox/" + message.getId();
+      var text_chat = message.getSubject() + '\n' + message.getPlainBody();
+      var answer = get_answer_chatGPT(text_chat, prompt_email);
+      
+      if (answer === "None") {
+        continue; // Skip to next email if no tasks found
+      }
+
+      // Construct note content
+      var note = `
+# ${message.getSubject()}
+- Link: ${email_link}
+- Date: ${Utilities.formatDate(message.getDate(), "GMT", "yyyy-MM-dd")}
+- From: ${message.getFrom().replace(/^.+<([^>]+)>$/, "$1")}
+- To: ${message.getTo().replace(/^.+<([^>]+)>$/, "$1")}
+${answer}
+`;
+
+      // Push note to Mem and log the response
+      var mem_id = push_to_mem(note);
+      Logger.log(mem_id);
+
+      // Optional: Unstar the message after processing
+      // message.unstar();
+    }
+  }
+}
