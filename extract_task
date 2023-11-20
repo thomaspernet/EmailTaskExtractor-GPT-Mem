@@ -121,7 +121,7 @@ ${answer}
       Logger.log(mem_id);
 
       // Optional: Unstar the message after processing
-      // message.unstar();
+      message.unstar();
     }
   }
 }
